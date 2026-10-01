@@ -1,0 +1,37 @@
+# Who hears about what. Receivers are webhooks to the lab's alert-sink; in production they would be
+# the paging tool (critical), the ticket queue (warning) and the owning team's channel (info).
+route:
+  receiver: ticket
+  group_by: [alertname, Hostname]
+  group_wait: 5s        # production: 30s
+  group_interval: 30s   # production: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: pager
+    - matchers: [severity="info"]
+      receiver: owners
+      group_by: [namespace]   # one message per team, listing all their idle GPUs
+
+receivers:
+  - name: pager
+    webhook_configs:
+      - url: http://alert-sink:9099/pager
+        send_resolved: true
+  - name: ticket
+    webhook_configs:
+      - url: http://alert-sink:9099/ticket
+  - name: owners
+    webhook_configs:
+      - url: http://alert-sink:9099/owners
+
+inhibit_rules:
+  # A GPU that fell off the bus or failed in hardware also looks idle. Don't tell the owning team
+  # their pod is wasting a GPU when the GPU is broken.
+  - source_matchers: [severity="critical", action=~"drain|quarantine"]
+    target_matchers: [alertname="GPUAllocatedButIdle"]
+    equal: [Hostname, gpu]
+  # The critical temperature alert replaces the warning for the same GPU.
+  - source_matchers: [alertname="GPUTemperatureCritical"]
+    target_matchers: [alertname="GPUTemperatureHigh"]
+    equal: [Hostname, gpu]
