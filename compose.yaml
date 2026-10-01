@@ -1,0 +1,52 @@
+# The whole lab on one machine: simulated GPU fleet -> Prometheus (rules) -> Alertmanager -> sink,
+# and Grafana on top. Ports are bound to localhost only.
+name: gpu-fleet
+
+services:
+  fleet-sim:
+    build: .
+    command: ["/usr/local/bin/fleet-sim", "-port=9400"]
+    ports: ["127.0.0.1:9400:9400"]
+    restart: unless-stopped
+
+  alert-sink:
+    build: .
+    command: ["/usr/local/bin/alert-sink", "-listen=:9099"]
+    ports: ["127.0.0.1:9099:9099"]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+    ports: ["127.0.0.1:9090:9090"]
+    depends_on: [fleet-sim, alertmanager]
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports: ["127.0.0.1:9093:9093"]
+    depends_on: [alert-sink]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"        # lab only: read-only access without a login
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/gpu-fleet.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [prometheus]
+    restart: unless-stopped
