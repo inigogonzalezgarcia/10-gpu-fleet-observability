@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROMETHEUS_IMAGE: prom/prometheus:v3.15.0
+  ALERTMANAGER_IMAGE: prom/alertmanager:v0.34.1
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race -count=1 ./...
+      - name: Dashboard JSON matches tools/gen_dashboard.py
+        run: python3 tools/gen_dashboard.py && git diff --exit-code grafana/dashboards/
+
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: promtool check config
+        run: |
+          docker run --rm --entrypoint promtool -v "$PWD/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+            -v "$PWD/prometheus/rules:/etc/prometheus/rules:ro" "$PROMETHEUS_IMAGE" check config /etc/prometheus/prometheus.yml
+      - name: promtool test rules
+        run: docker run --rm --entrypoint promtool -v "$PWD/prometheus:/w:ro" -w /w/tests "$PROMETHEUS_IMAGE" test rules alerts.test.yml
+      - name: amtool check-config
+        run: docker run --rm --entrypoint amtool -v "$PWD/alertmanager:/w:ro" "$ALERTMANAGER_IMAGE" check-config /w/alertmanager.yml
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -x scripts/*.sh
+
+  e2e:
+    needs: [unit, rules, lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the lab
+        run: bash scripts/up.sh
+      - name: Run the scenarios
+        run: bash scripts/test.sh
+      - name: Logs
+        if: failure()
+        run: docker compose ps && docker compose logs --tail=200
