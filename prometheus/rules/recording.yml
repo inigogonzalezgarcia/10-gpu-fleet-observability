@@ -1,0 +1,61 @@
+# Recording rules: the numbers the dashboards, the report and the alerts are built on.
+# Naming follows level:metric:operation (https://prometheus.io/docs/practices/rules/).
+groups:
+  - name: gpu-fleet-recording
+    rules:
+      # --- Inventory -------------------------------------------------------------------------
+      - record: fleet:gpus:count
+        expr: count(DCGM_FI_DEV_GPU_UTIL)
+      - record: fleet:gpus_allocated:count
+        expr: count(DCGM_FI_DEV_GPU_UTIL{pod!=""}) or vector(0)
+      - record: node:gpus_allocated:count
+        expr: count by (Hostname) (DCGM_FI_DEV_GPU_UTIL{pod!=""})
+      - record: namespace:gpus_allocated:count
+        expr: count by (namespace) (DCGM_FI_DEV_GPU_UTIL{pod!=""})
+
+      # --- Utilisation -----------------------------------------------------------------------
+      - record: fleet:gpu_utilization:avg
+        expr: avg(DCGM_FI_DEV_GPU_UTIL)
+      - record: fleet:gpu_utilization_allocated:avg
+        expr: avg(DCGM_FI_DEV_GPU_UTIL{pod!=""})
+      - record: node:gpu_utilization:avg
+        expr: avg by (Hostname) (DCGM_FI_DEV_GPU_UTIL)
+      - record: namespace:gpu_utilization:avg
+        expr: avg by (namespace) (DCGM_FI_DEV_GPU_UTIL{pod!=""})
+
+      # A GPU assigned to a pod that has done (almost) nothing for 30 minutes: the most expensive
+      # kind of idle, because nobody else can use it.
+      - record: gpu:allocated_idle:30m
+        expr: avg_over_time(DCGM_FI_DEV_GPU_UTIL{pod!=""}[30m]) < 5
+      - record: fleet:gpus_allocated_idle:count
+        expr: count(gpu:allocated_idle:30m) or vector(0)
+
+      # --- Power -----------------------------------------------------------------------------
+      - record: fleet:gpu_power_watts:sum
+        expr: sum(DCGM_FI_DEV_POWER_USAGE)
+      - record: node:gpu_power_watts:sum
+        expr: sum by (Hostname) (DCGM_FI_DEV_POWER_USAGE)
+      # Energy counter is in millijoules: mJ/s / 1000 = W. Cross-check for the power gauge.
+      - record: fleet:gpu_energy_watts:rate5m
+        expr: sum(rate(DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION[5m])) / 1000
+
+      # --- Health ----------------------------------------------------------------------------
+      # One series per GPU that needs to leave service (same signals as repo 09's controller).
+      - record: gpu:unhealthy
+        expr: |
+          count by (Hostname, gpu, UUID) (
+              (DCGM_FI_DEV_ECC_DBE_VOL_TOTAL > 0)
+            or (DCGM_FI_DEV_ROW_REMAP_FAILURE > 0)
+            or (DCGM_FI_DEV_XID_ERRORS == 48) or (DCGM_FI_DEV_XID_ERRORS == 63)
+            or (DCGM_FI_DEV_XID_ERRORS == 64) or (DCGM_FI_DEV_XID_ERRORS == 74)
+            or (DCGM_FI_DEV_XID_ERRORS == 79) or (DCGM_FI_DEV_XID_ERRORS == 92)
+            or (DCGM_FI_DEV_XID_ERRORS == 95) or (DCGM_FI_DEV_XID_ERRORS == 119)
+            or (DCGM_FI_DEV_XID_ERRORS == 120)
+          )
+      - record: fleet:gpus_unhealthy:count
+        expr: count(gpu:unhealthy) or vector(0)
+      # GPUs we can actually schedule on, out of the GPUs we expect (8 per node with an exporter target).
+      - record: fleet:gpus_expected:count
+        expr: count(up{job="dcgm-exporter"}) * 8
+      - record: fleet:gpus_healthy:ratio
+        expr: ((fleet:gpus:count or vector(0)) - fleet:gpus_unhealthy:count) / fleet:gpus_expected:count

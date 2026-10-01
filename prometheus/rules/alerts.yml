@@ -1,0 +1,113 @@
+# Alerting rules for a GPU fleet. Every alert has a runbook entry in docs/alerts.md.
+# Severity: critical = page someone / automation acts; warning = ticket; info = tell the owners.
+groups:
+  - name: gpu-hardware
+    rules:
+      - alert: GPUFellOffBus
+        expr: DCGM_FI_DEV_XID_ERRORS == 79
+        labels:
+          severity: critical
+          action: drain
+        annotations:
+          summary: "GPU {{ $labels.gpu }} on {{ $labels.Hostname }} fell off the bus (XID 79)"
+          description: "The driver lost the GPU. Work on it is stuck. Drain the node, reset or reboot, then validate."
+          runbook_url: "https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/blob/main/docs/alerts.md#gpufelloffbus"
+
+      - alert: GPUHardwareXID
+        expr: |
+          (DCGM_FI_DEV_XID_ERRORS == 48) or (DCGM_FI_DEV_XID_ERRORS == 63) or (DCGM_FI_DEV_XID_ERRORS == 74)
+          or (DCGM_FI_DEV_XID_ERRORS == 95) or (DCGM_FI_DEV_XID_ERRORS == 119) or (DCGM_FI_DEV_XID_ERRORS == 120)
+        labels:
+          severity: critical
+          action: drain
+        annotations:
+          summary: "XID {{ $value }} on GPU {{ $labels.gpu }} of {{ $labels.Hostname }}"
+          description: "A hardware-class XID that needs a GPU reset before the GPU can be trusted again."
+          runbook_url: "https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/blob/main/docs/alerts.md#gpuhardwarexid"
+
+      - alert: GPUUncorrectableECC
+        expr: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL > 0
+        labels:
+          severity: critical
+          action: drain
+        annotations:
+          summary: "{{ $value }} uncorrectable ECC error(s) on GPU {{ $labels.gpu }} of {{ $labels.Hostname }}"
+          description: "Double-bit ECC errors since the last reset. Results computed on this GPU may be wrong."
+          runbook_url: "https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/blob/main/docs/alerts.md#gpuuncorrectableecc"
+
+      - alert: GPUMemoryUnrepairable
+        expr: (DCGM_FI_DEV_ROW_REMAP_FAILURE > 0) or (DCGM_FI_DEV_XID_ERRORS == 64) or (DCGM_FI_DEV_XID_ERRORS == 92)
+        labels:
+          severity: critical
+          action: quarantine
+        annotations:
+          summary: "GPU {{ $labels.gpu }} on {{ $labels.Hostname }} cannot repair its memory"
+          description: "Row remapping failed or the single-bit error rate is high. Quarantine the node and open a hardware ticket (RMA)."
+          runbook_url: "https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/blob/main/docs/alerts.md#gpumemoryunrepairable"
+
+      - alert: NVLinkErrorsIncreasing
+        expr: rate(DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVLink CRC errors rising on GPU {{ $labels.gpu }} of {{ $labels.Hostname }}"
+          description: "{{ $value | humanize }} errors/s for 10 minutes. Multi-GPU jobs on this node may slow down or fail."
+          runbook_url: "https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/blob/main/docs/alerts.md#nvlinkerrorsincreasing"
+
+  - name: gpu-thermal
+    rules:
+      - alert: GPUTemperatureHigh
+        expr: DCGM_FI_DEV_GPU_TEMP >= 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU {{ $labels.gpu }} on {{ $labels.Hostname }} at {{ $value }}°C"
+          description: "Above 85°C for 5 minutes. Check airflow and the neighbours in the rack."
+          runbook_url: "https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/blob/main/docs/alerts.md#gputemperaturehigh"
+
+      - alert: GPUTemperatureCritical
+        expr: DCGM_FI_DEV_GPU_TEMP >= 90
+        for: 2m
+        labels:
+          severity: critical
+          action: cordon
+        annotations:
+          summary: "GPU {{ $labels.gpu }} on {{ $labels.Hostname }} at {{ $value }}°C"
+          description: "Above 90°C for 2 minutes: the GPU is throttling. Cordon the node so no new work lands on it."
+          runbook_url: "https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/blob/main/docs/alerts.md#gputemperaturecritical"
+
+  - name: gpu-telemetry
+    rules:
+      - alert: GPUExporterDown
+        expr: up{job="dcgm-exporter"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No GPU telemetry from {{ $labels.Hostname }}"
+          description: "The exporter has not answered for 1 minute. Every other GPU alert for this node is blind."
+          runbook_url: "https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/blob/main/docs/alerts.md#gpuexporterdown"
+
+  - name: gpu-capacity
+    rules:
+      - alert: GPUFleetHealthyCapacityLow
+        expr: fleet:gpus_healthy:ratio < 0.9
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Only {{ $value | humanizePercentage }} of the fleet's GPUs are healthy and reporting"
+          description: "More than 10% of expected GPUs are unhealthy or missing. Check for a common cause (driver rollout, rack, power) before handling nodes one by one."
+          runbook_url: "https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/blob/main/docs/alerts.md#gpufleethealthycapacitylow"
+
+      - alert: GPUAllocatedButIdle
+        expr: gpu:allocated_idle:30m
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.pod }} holds GPU {{ $labels.gpu }} on {{ $labels.Hostname }} without using it"
+          description: "Under 5% utilisation for at least 30 minutes. The GPU is reserved, so nobody else can use it."
+          runbook_url: "https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/blob/main/docs/alerts.md#gpuallocatedbutidle"
