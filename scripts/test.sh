@@ -78,13 +78,6 @@ wait_for 30 is 'q fleet:gpus_allocated_idle:count' 2 && pass "2 GPUs held by an 
   fail "allocated idle: $(q fleet:gpus_allocated_idle:count)"
 ml=$(q 'namespace:gpu_utilization:avg{namespace="ml-training"}')
 ge "echo $ml" 80 && pass "ml-training utilisation ${ml%.*}%" || fail "ml-training utilisation $ml"
-# The energy counter (mJ) and the power gauge (W) must tell the same story. irate uses the last two
-# scrapes, so this works seconds after start; the 5m recording rule needs 5 minutes of data.
-pw=$(q fleet:gpu_power_watts:sum)
-en=$(q 'sum(irate(DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION[1m])) / 1000')
-approx "$pw" "$en" "$(python3 -c "print(float('$pw')*0.1)")" && pass "energy counter agrees with power gauge (${pw%.*} W vs ${en%.*} W)" ||
-  fail "power ${pw} W vs energy rate ${en} W"
-
 # ---------------------------------------------------------------------------------------------
 step "2. Application XID 13 on gpu-node-1: no alert, not unhealthy"
 sim "/fault?node=gpu-node-1&gpu=0&xid=13"
@@ -131,6 +124,15 @@ inhibited=$(curl -fsS -G "$AM/api/v2/alerts" --data-urlencode 'filter=alertname=
 wait_for 40 is 'owners ticket GPUTemperatureHigh' "gpu-node-1/6" && pass "warning for GPU 6 went to the ticket queue; GPU 5's was inhibited" ||
   fail "ticket got: $(owners ticket GPUTemperatureHigh)"
 wait_for 20 ge 'received pager GPUTemperatureCritical firing' 1 && pass "critical temperature paged" || fail "critical temperature not paged"
+
+# The energy counter (mJ) and the power gauge (W) must tell the same story. Compared over one minute,
+# once there are two minutes of data: a single scrape interval is too sensitive to scrape timing on a
+# busy CI runner, and a window older than the data underestimates rate().
+wait_for 120 ge 'q "count_over_time(fleet:gpu_power_watts:sum[2m])"' 23 >/dev/null
+pw=$(q 'avg_over_time(fleet:gpu_power_watts:sum[1m])')
+en=$(q 'sum(rate(DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION[1m])) / 1000')
+approx "$pw" "$en" "$(python3 -c "print(float('$pw')*0.05)")" && pass "energy counter agrees with power gauge within 5% (${pw%.*} W vs ${en%.*} W)" ||
+  fail "power ${pw} W vs energy rate ${en} W"
 
 # ---------------------------------------------------------------------------------------------
 step "6. Exporter on gpu-node-3 stops answering"
