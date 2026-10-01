@@ -1,0 +1,8 @@
+.git
+docs
+scripts
+grafana
+prometheus
+alertmanager
+tools
+*.md
