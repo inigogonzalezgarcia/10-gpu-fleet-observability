@@ -6,7 +6,7 @@ Metrics, alerts, routing and a dashboard for a fleet of GPU nodes, built on the 
 
 ![ci](https://github.com/inigogonzalezgarcia/10-gpu-fleet-observability/actions/workflows/ci.yml/badge.svg)
 
-> A learning-in-public lab about running GPU clusters. I don't have production GPU fleet experience; this is how I am learning what to watch. There is no GPU here: a simulator serves dcgm-exporter's metric names and labels for 4 nodes × 8 GPUs. It is the observability half of [09 GPU Node Remediation](https://github.com/inigogonzalezgarcia/09-gpu-node-remediation), which acts on the same signals.
+> A lab on observability for GPU clusters, built on years of monitoring and Grafana dashboards. A simulator serves dcgm-exporter's metric names and labels for 4 nodes × 8 GPUs. It is the observability half of [09 GPU Node Remediation](https://github.com/inigogonzalezgarcia/09-gpu-node-remediation), which acts on the same signals.
 
 ## What it answers
 
